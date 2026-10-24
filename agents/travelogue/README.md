@@ -2,7 +2,16 @@
 
 > An illustrated travel timeline and world map for preserving memories, discovering destinations, and planning trips through coordinated AI agents.
 
-**Status: design-stage workshop prototype.** This README describes the agreed implementation target. Application code, setup scripts, integrations, and measured evaluation results are not yet available. Commands marked as planned must be implemented and verified before release.
+**Status: first local implementation milestone.** The map, illustrated journal/timeline, local persistence, planner UI, four-agent ADK workflow, and Ollama adapter are implemented. The default planner is explicitly scripted. Firebase Authentication, Neon PostgreSQL, Firebase Storage, and public publishing are planned integrations, not working features yet.
+
+| Capability | Current status |
+| :--- | :--- |
+| World map and five-country discovery | Implemented with bundled SVG geometry and curated, unverified destination cards |
+| Journal, timeline, and local persistence | Implemented using SQLite; sample stories are fictional |
+| Photo/video attachment handling | Implemented; FFprobe required; successful real-media/browser flows not yet verified |
+| Planner and saved itineraries | Implemented with editable activity titles/notes and structural checks |
+| Local Gemma through Ollama | ADK adapter implemented and tested with a mocked transport; actual inference not run |
+| Hosted auth, relational backend, media, publication | Pending Firebase/Neon milestone |
 
 ---
 
@@ -24,28 +33,28 @@
 5. **Travel planner:** Generate editable daily itineraries from dates, budget, interests, and travel preferences through coordinated agents.
 6. **Illustrated timeline:** Organize memories by year, trip, day, and place.
 
-Entries start private. Users explicitly publish or unpublish individual posts. Recording a visit marks its country visited even without a blog; only entries with blog content provide blog links.
+All current entries remain local and private to the demo installation. Explicit publish/unpublish is planned for the authenticated hosted version. Recording a visit marks its country visited even without a blog; only entries with blog content provide blog links.
 
-The interface uses midnight navy surfaces, ivory text, teal visited countries, slate unvisited countries, and amber planned-trip badges. Labels and icons accompany colors. Illustrations include passport stamps, postcard imagery, and route lines. Desktop combines the timeline with a sticky map; mobile offers Map/Timeline tabs. Hover previews also work through keyboard selection and mobile taps. Respect reduced-motion preferences.
+The interface uses a travel-first editorial layout inspired by the reference direction at [Mindtrip](https://mindtrip.ai/): a bold yellow hero, oversized original headline, bundled postcard illustrations, rounded planning prompt, compact top navigation, and generous white space. Original Travelogue branding, artwork, and copy are retained. Light mode is the default; the header toggle selects dark mode and remembers the choice locally. Blue oceans, yellow unvisited land, and black visited countries remain on the map; white outlines identify focus/selection. Hover, focus, and press transitions respect reduced motion. Labels and icons accompany colors. Illustrations include passport stamps, postcard imagery, and route lines. Atlas and Journal views are available through responsive navigation; the Journal view renders dated entries along a timeline. Sticky-map storytelling is a future enhancement. Hover previews also work through keyboard selection and mobile taps. Animations respect reduced-motion preferences.
 
 ---
 
 ## Technical Stack
 
-| Component | Planned technology |
+| Component | Technology and status |
 | :--- | :--- |
-| Language and runtime | TypeScript, Node.js 22; Python 3.11 |
-| Frontend | Next.js |
-| Styling and animation | Tailwind CSS, shadcn/ui, Motion for React |
-| Map | MapLibre GL JS and bundled Natural Earth country boundaries |
+| Language and runtime | TypeScript, Node.js 22+; Python 3.11+ (verified with Node 24 and Python 3.12) |
+| Frontend | React + Vite for the first runnable milestone; replaces the initial Next.js proposal |
+| Styling and animation | Custom CSS, native dialogs, and CSS transitions; reduced-motion support |
+| Map | Accessible SVG rendering of bundled Natural Earth boundaries; no map-service key |
 | Backend | FastAPI, Pydantic |
 | Agent framework | Google Agent Development Kit (ADK) |
-| Models | Gemini; explicit model identifier configured through an environment variable |
-| Authentication | Firebase Authentication |
-| Relational database | Neon PostgreSQL |
-| Database access and migrations | SQLAlchemy, Alembic |
-| Media storage | Cloud Storage for Firebase |
-| Research | Tavily |
+| Models | Local Gemma 3 through Ollama (`gemma3:4b` by default), or scripted demo |
+| Authentication | Firebase Authentication (planned; current app is loopback-only) |
+| Relational database | SQLite now; Neon PostgreSQL planned |
+| Database access and migrations | Python sqlite3 now; SQLAlchemy/Alembic planned for PostgreSQL |
+| Media storage | Local files now; Cloud Storage for Firebase planned |
+| Research | Curated fixtures; optional Tavily adapter (live call not verified) |
 | Video inspection | FFprobe |
 | Local demo | SQLite, local media, scripted agent outputs |
 
@@ -55,18 +64,18 @@ Keep code, manifests, lockfiles, migrations, configuration examples, fixtures, a
 
 ## Architecture & Data Flow
 
-### Application Architecture
+### Target Hosted Architecture
 
 ```mermaid
 flowchart TB
-    USER["Traveler"] --> UI["Next.js<br/>Map · Timeline · Journal · Planner"]
-    UI --> AUTH["Firebase Authentication"]
+    USER["Traveler"] --> UI["React frontend<br/>Map · Timeline · Journal · Planner"]
+    UI --> AUTH["Firebase Authentication · planned"]
     AUTH -->|"Identity token"| UI
     UI -->|"Authenticated requests"| API["FastAPI<br/>Verify identity and ownership"]
     API --> APP["Application services<br/>SQLAlchemy"]
-    APP --> DB[("Neon PostgreSQL")]
+    APP --> DB[("Neon PostgreSQL · planned")]
     API --> MEDIA["Media validation and access"]
-    MEDIA --> STORAGE[("Private Firebase Storage")]
+    MEDIA --> STORAGE[("Private Firebase Storage · planned")]
     API --> RUN["ADK workflow runner"]
     RUN --> PAR["Parallel research"]
     PAR --> DEST["Destination researcher"]
@@ -83,7 +92,22 @@ flowchart TB
     UI -->|"User edits and saves"| API
 ```
 
-Map browsing, journaling, and timeline rendering use ordinary application services. Agents handle research and itinerary generation. The browser never connects directly to Neon: personal database operations pass through ownership-checked backend services.
+**Current local deployment:** React/Vite → FastAPI → SQLite/local files. Firebase identity, ownership policies, PostgreSQL, and public access in the diagram above are future work. The application refuses non-demo storage mode and binds to loopback.
+
+Map browsing, journaling, and timeline rendering use ordinary application services. Agents handle research and itinerary generation. The future browser client will never connect directly to Neon; its backend must verify identity and ownership before database access.
+
+### Home and Trip Starters
+
+The homepage prompt recognizes curated country/place names and opens the trip form with the matching country and entered interests. Trip-starter chips prefill Japan, Italy, or Thailand. Unsupported destination input asks the traveler to select a supported workshop country rather than silently planning elsewhere. This prompt does not claim conversational model inference; generation begins only after the planner form is submitted. Header navigation switches between discovery, the journal timeline, and saved trips.
+
+### Planner Progress and Map Controls
+
+- The planner animates while work is active, rotates travel-themed messages, shows elapsed time, and asks travelers to wait. Completion counts come from actual stage callbacks, never a fabricated time-based percentage.
+- Research agents can both show as running. Each step reports pending, running, completed, or interrupted; animation stops on completion or failure. Older saved runs without stage metadata do not invent completion states.
+- The Ollama request timeout follows the configured workflow deadline. Raising `PLANNER_TIMEOUT_SECONDS` no longer leaves a separate fixed 110-second request limit.
+- **Full screen** opens a viewport-filling map dialog and requests native fullscreen where supported. Exit using the map control or Escape. Keyboard focus is contained in the dialog.
+- **Pop-out previews** toggles country/place cards. Hover or focus a country or pin to see memories, illustrated attraction thumbnails, and seasonal guidance. Click or press Enter to keep a card open; its links can open memories or official tourism sites. Preview placement is clamped to the map bounds.
+- Maps remain limited to the bundled geometry and five curated countries; these controls do not create new destination data or invoke a model on hover.
 
 ### Agent Responsibilities
 
@@ -96,7 +120,7 @@ Map browsing, journaling, and timeline rendering use ordinary application servic
 
 Researchers run in parallel and write separate state keys. Planning and review follow sequentially. Deterministic validation checks required fields, dates, country consistency, duration, and budget arithmetic. Structural validity does not establish factual accuracy.
 
-Bound each run to one country, up to 14 days, eight search calls, four model turns per agent, one reviewer revision, and a 120-second deadline. No recursive delegation. Incomplete runs return explicit warnings or failure status. Agents cannot book trips, publish entries, or execute arbitrary commands.
+Bound each run to one country, up to 14 days, eight search calls, four model turns per agent, one reviewer revision, and a 120-second deadline. No recursive delegation. In this milestone tools retrieve evidence before model execution; the custom text/JSON adapter does not claim native Gemma function calling. A single optional Tavily request stays below the search limit. Incomplete runs return explicit warnings or failure status. Agents cannot book trips, publish entries, or execute arbitrary commands.
 
 ### Data Flow
 
@@ -123,7 +147,7 @@ flowchart LR
     PUBLICATION --> BLOG["Public blog projection"]
 ```
 
-Country previews use cached records. Hovering never starts model work. Missing or refreshed destination information requires an explicit research action. Store source URLs and retrieval timestamps; prefer official tourism and attraction sources. Missing facts stay unknown. Prices and travel buffers remain estimates unless supported by evidence.
+Country previews use cached records. Hovering never starts model work. Arbitrary-country refresh/research is planned; current previews use the bundled five-country catalog. Store source URLs and retrieval timestamps; prefer official tourism and attraction sources. Missing facts stay unknown. Prices and travel buffers remain estimates unless supported by evidence.
 
 ### Relational Data Model
 
@@ -139,11 +163,11 @@ erDiagram
     USER ||--o{ PLANNING_RUN : requests
 ```
 
-PostgreSQL holds relationships, journal content, attachment references, research metadata, and saved plans. Media files remain in file storage. Owned records reference the verified Firebase UID.
+The target PostgreSQL model holds relationships, journal content, attachment references, research metadata, and saved plans. SQLite currently persists the local subset. Media files remain in file storage. Future hosted records will reference verified Firebase UIDs; the current SQLite store is a single local demo account.
 
 ### Interfaces and Internal Tools
 
-Application services provide country summaries and cached previews, explicit research requests, owner-scoped planning-run progress/results, CRUD for visits/journals/attachments/saved plans, and explicit publication with public reads of published entries.
+Implemented endpoints: `GET /api/catalog`, journal CRUD at `/api/entries`, media upload/read/delete, `POST /api/planner/runs`, `GET /api/planner/runs/{id}`, `POST /api/plans/{run_id}`, `GET /api/plans`, and model readiness at `/api/model/status`. Planning runs persist progress; saved-plan requests can include an edited itinerary, which is validated again. Publishing requests are rejected. Arbitrary-country live discovery and separate visit CRUD remain future work.
 
 | Tool | Purpose |
 | :--- | :--- |
@@ -161,12 +185,13 @@ These tools live inside Travelogue. No separate root `tools/` contribution or MC
 ### Hosted-App Users
 
 - Modern browser.
-- Sign-in for saving journals and itineraries or uploading media.
+- No hosted version yet. The current demo uses one local sample traveler.
+- Future hosted personal features will require sign-in.
 
 ### Local Developers
 
-- Git, Node.js 22, and npm.
-- Python 3.11 and pip.
+- Git, Node.js 22+, and npm.
+- Python 3.11+ with pip and venv.
 - FFprobe for video inspection.
 
 The standard demo requires no API keys, Docker, Firebase emulator, or local PostgreSQL installation.
@@ -184,25 +209,30 @@ Service quotas apply independently. Hosting, media, search, and model usage may 
 
 ## Installation & Setup
 
-**Planned commands, not implemented or verified.**
+The setup script is provided. **Fresh Python dependency installation is not verified** because this environment cannot resolve package registries. A clean offline frontend installation from the lockfile was verified using cached packages.
 
-1. Navigate to the project:
+```bash
+cd agents/travelogue
+npm run setup
+npm run dev
+```
 
-   ```bash
-   cd agents/travelogue
-   ```
+Setup creates `.env` without overwriting it, creates `.venv`, installs requirements and frontend dependencies, and seeds the SQLite journal. Open **http://127.0.0.1:5173**. API documentation is at **http://127.0.0.1:8000/docs**.
 
-2. Initialize the demo:
+Install FFprobe (distributed with FFmpeg) on the application host to enable media uploads. Without it, uploads fail closed with a clear message; journaling and planning still work.
 
-   ```bash
-   npm run setup
-   ```
+Existing environments can install dependencies manually:
 
-   The script will create a Python virtual environment, install declared dependencies, create configuration from placeholders without overwriting existing values, apply demo migrations, and seed sample data.
+```bash
+python3 -m venv .venv
+# Linux / macOS / WSL:
+source .venv/bin/activate
+# Windows PowerShell instead: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+npm ci
+```
 
-3. For live mode, configure the external services and apply PostgreSQL migrations with the documented project command.
-
-Before release, supply project-local manifests, lockfiles, `.gitignore`, and `.env.example`, and replace planned setup with verified instructions for platforms actually tested. This documentation-only draft does not include application scaffolding.
+The environment has no browser and blocks listening sockets, so visual interaction and server startup could not be verified here. Build and in-process API checks are reported below.
 
 ---
 
@@ -210,38 +240,61 @@ Before release, supply project-local manifests, lockfiles, `.gitignore`, and `.e
 
 | Variable Name | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `TRAVELOGUE_MODE` | No | `demo` | `demo` or `live` |
-| `DATABASE_URL` | Live | Local SQLite in demo | Server-side Neon PostgreSQL connection |
-| `GEMINI_API_KEY` | Live | None | Server-side model credential |
-| `GEMINI_MODEL` | Live | None | Explicit model identifier |
-| `TAVILY_API_KEY` | Live | None | Server-side search credential |
-| `FIREBASE_PROJECT_ID` | Live | None | Backend Firebase project |
-| `FIREBASE_STORAGE_BUCKET` | Live | None | Private media bucket |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Local live development | None | Local credential-file path; prefer workload identity when hosted |
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | Live | None | Browser Firebase configuration |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Live | None | Browser authentication domain |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Live | None | Browser Firebase project |
-| `NEXT_PUBLIC_API_BASE_URL` | No | Local backend | API endpoint |
-| `LOG_LEVEL` | No | `info` | Backend logging verbosity |
+| `TRAVELOGUE_MODE` | No | `demo` | Only local demo storage is supported in this milestone |
+| `MODEL_PROVIDER` | No | `demo` | `demo` for scripted output or `ollama` for real local inference |
+| `OLLAMA_BASE_URL` | Ollama | `http://127.0.0.1:11434` | Server-side Ollama endpoint; never exposed directly to browsers |
+| `OLLAMA_MODEL` | Ollama | `gemma3:4b` | Locally downloaded model tag |
+| `PLANNER_TIMEOUT_SECONDS` | No | `120` | Overall run deadline; slower hardware may require more time |
+| `TAVILY_API_KEY` | No | None | Enables one optional live search before research agents |
+| `DATABASE_URL` | Future | None | Reserved for Neon; currently unused |
+| `FIREBASE_PROJECT_ID` | Future | None | Reserved for authenticated deployment |
+| `FIREBASE_STORAGE_BUCKET` | Future | None | Reserved for hosted media |
 
-Backend configuration loads from the project-root `.env`. Frontend setup exposes browser configuration explicitly. Never place privileged credentials or database passwords in `NEXT_PUBLIC_*` variables. Firebase browser configuration does not replace authorization checks.
+The backend loads the project-root `.env`. Local records and files live in ignored `.runtime/`. Do not commit credentials, `.env`, private media, or runtime databases. The Vite development server proxies `/api` to the loopback backend.
 
 ---
 
 ## How to Run
 
-**Planned command, not implemented:**
-
 ```bash
 npm run dev
 ```
 
-This will start the frontend and backend together.
+The frontend starts at http://127.0.0.1:5173. Backend startup and port binding require an unrestricted local terminal. `TRAVELOGUE_PYTHON` can select an existing Python executable; otherwise scripts prefer `.venv` and fall back to system Python.
 
-- **Demo:** sample traveler, SQLite, local media, and scripted results; persistent **“Demo: scripted data”** label; no live agent execution. Bind the backend to loopback. Public sharing is unsupported.
-- **Live:** Firebase sign-in, Neon persistence, private Firebase Storage, Gemini/Tavily research, ownership checks, and explicit blog publication.
+### Scripted Demo
 
-Add hosted deployment instructions and a URL after verification. A hosted demonstration must isolate visitors' writes rather than expose one shared writable account.
+Keep `MODEL_PROVIDER=demo`. The planner displays **“Scripted demo — no model ran”**. It checks dates and arithmetic but does not claim preference satisfaction or current travel accuracy.
+
+### Local Gemma with Ollama
+
+Install [Ollama](https://ollama.com/download) on the application host, then download the model:
+
+```bash
+ollama pull gemma3:4b
+ollama serve
+```
+
+If Ollama is already running, do not start a second server. Set these values in `.env` and restart Travelogue:
+
+```dotenv
+MODEL_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma3:4b
+PLANNER_TIMEOUT_SECONDS=120
+```
+
+The planner checks `/api/model/status` and shows whether the configured model is available. Failed inference never silently substitutes scripted results. For WSL, run Ollama in the same environment or configure a reachable host endpoint. Keep Ollama private.
+
+The four ADK agents use a custom text/JSON adapter for Ollama's [`/api/chat`](https://docs.ollama.com/api/chat). Research evidence is retrieved in code before the workflow; no native Gemma tool calling is assumed. Actual Gemma inference and hardware suitability remain unverified. Travelers do not need Ollama; only the application operator does.
+
+### Build
+
+```bash
+npm run build
+```
+
+Build output is in ignored `dist/`. After building, the backend can serve the bundle locally. Public deployment is intentionally unsupported until Firebase and Neon ownership checks are implemented.
 
 ---
 
@@ -255,28 +308,40 @@ starting in Kyoto.
 
 Interests: temples and local food.
 Pace: relaxed.
-Budget: INR 120,000, excluding international flights.
+Budget: INR 100,000, excluding international flights.
 ```
 
 The structured request must supply exact dates and the year before generation.
 
 ### Example Output
 
-**Not yet captured.** There is no genuine application run at this stage.
+An actual scripted backend run for 10–14 November 2026, Japan, two travelers, and INR 100,000 returned:
 
-After implementation, include separately labeled demo and live results with daily activities, sources, cost estimates, seasonal guidance, assumptions, and warnings. Never represent illustrative or scripted output as a live result.
+```json
+{
+  "title": "A little slower in Kyoto",
+  "provider": "demo",
+  "model": "scripted-demo",
+  "days": 5,
+  "estimated_total": "20000.00",
+  "factual_correctness": "not evaluated"
+}
+```
+
+This is a shortened summary of scripted output, not a live model result. Each day's INR 4,000 allocation is fictional and covers the entire party; lodging and transport are unpriced. Interests and special constraints are explicitly marked unassessed. Live Gemma output has not been captured.
 
 ---
 
 ## How to Test
 
-**Planned command, not implemented:**
-
 ```bash
 npm run verify
+# Separately:
+python3 -m unittest discover -s backend/tests -v
+python3 -m backend.evals
 ```
 
-Run backend tests, frontend lint/type checks, browser tests, and a production build. Invoke live evaluations separately to avoid unexpected API usage and costs.
+Verification runs 16 backend/agent tests, 30 offline structural cases, UI logic checks, TypeScript checks, and the production build. It does not run browser tests or live inference. Evaluation output is written to ignored `.runtime/eval-results.json`. Invoke future live quality evaluations separately to avoid unexpected usage.
 
 ### Functional Completeness and Correctness
 
@@ -324,7 +389,7 @@ Privacy failures and fabricated citations block release regardless of score. Com
 | Invalid or missing inputs | 5 |
 | Failures and adversarial inputs | 5 |
 
-Version these 30 cases with inputs, expected behavior, constraints, and evidence fixtures. Cover dietary/accessibility preferences, unrealistic budgets, reversed dates, search outages, malformed responses, conflicting evidence, retrieved prompt injection, and timeouts. Do not require one exact itinerary.
+The first 30 offline cases are versioned in `backend/evals.py` (`structural-v1`) with inputs, expected behavior, constraints, and output mutations. These do not constitute the full live-quality dataset. Current cases cover preference non-assessment warnings, tiny budgets, reversed dates, wrong-country places, invented source IDs, missing days, arithmetic limits, and changed traveler counts. Additional live cases for search outages, conflicting evidence, retrieved prompt injection, and timeouts remain to be built. Do not require one exact itinerary.
 
 Run deterministic regressions on changes. Before release, run the live suite three times and report variability. Compare against a single-agent baseline using the same model, inputs, tools, and total resource limits. Measure quality, unsupported-claim rate, constraint violations, latency, token usage, and cost.
 
@@ -332,12 +397,15 @@ Run deterministic regressions on changes. Before release, run the live suite thr
 
 | Measure | Status |
 | :--- | :--- |
-| Functional acceptance | Not evaluated |
-| Completeness and constraint adherence | Not evaluated |
+| Backend/agent regression tests | 16 passing; includes CRUD persistence, invalid media, local-only access, ADK stages, and no silent fallback |
+| Offline structural regression | 30/30 passing; request validation, dates, source IDs, arithmetic, and disclosure checks only |
 | Factual grounding and feasibility | Not evaluated |
-| Privacy and ownership | Not evaluated |
+| Hosted privacy and ownership | Not implemented; demo rejects publication and external origins/hosts |
 | Multi-agent versus single-agent comparison | Not evaluated |
-| Fresh installation | Not verified |
+| UI progress and map logic | Passed: parallel stages, terminal states, elapsed time, popup clamping, and projection |
+| Frontend type check and production build | Passed with Node 24.21.0 / TypeScript 5.9.3 |
+| Fresh installation | Clean offline frontend npm ci passed; fresh Python install not verified |
+| Browser, real media, and live Ollama | Not verified; browser, FFprobe, and Ollama unavailable |
 
 Report dataset version, model identifier, date, environment, and limitations alongside measured results. Do not claim gates passed before execution.
 
@@ -345,19 +413,25 @@ Report dataset version, model identifier, date, environment, and limitations alo
 
 ## Known Limitations
 
-- Seeded discovery: India, Japan, Italy, France, Thailand. Other countries show empty states until explicitly researched in live mode.
-- One country and up to 14 days per itinerary.
+- Seeded discovery: India, Japan, Italy, France, Thailand. Other countries show empty states; arbitrary-country live discovery is not implemented yet.
+- One country and up to 14 days per itinerary. Only catalog places can be recorded or used in a validated plan.
+- Public publishing, Firebase sign-in, Neon persistence, and Firebase media are not connected.
+- The first frontend uses React/Vite, custom CSS, and SVG geometry rather than the proposed Next.js/Tailwind/Motion/MapLibre stack.
+- The pinned ADK version warns that ParallelAgent/SequentialAgent are deprecated; migrate after validating its replacement workflow API.
+- Automated tests use mocked Ollama responses; they do not establish Gemma output quality.
 - Seasonal patterns are not weather forecasts.
 - Costs and travel buffers are estimates unless supported by evidence; no routing provider in v1.
 - No bookings, payments, or live availability.
 - Images: JPEG/PNG/WebP, up to 10 MB. Videos: MP4/WebM, up to 25 MB and 30 seconds. No transcoding.
 - Free tiers have quotas and do not make the whole application free.
 - SQLite tests do not establish PostgreSQL compatibility; verify live migrations and queries separately.
-- Platforms, model quality, latency, cost, and token consumption remain unverified.
+- Browser behavior, successful real-media uploads, live model quality, latency, cost, and actual inference token consumption remain unverified.
 
 ---
 
 ## Security & Privacy Considerations
+
+**Current boundary:** one local demo account, loopback binding, restrictive Host/Origin checks, private local files, and publication disabled. The authenticated hosted guarantees below are implementation requirements, not completed integrations. Never expose this milestone publicly.
 
 - **Authentication and ownership:** Verify Firebase tokens. Derive ownership from verified identity rather than client-supplied user IDs. Check every personal resource.
 - **Database and secrets:** Backend-only Neon access. Keep credentials out of Git and browser bundles.
