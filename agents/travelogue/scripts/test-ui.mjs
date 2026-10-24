@@ -28,3 +28,27 @@ for(const [width,height,x,y] of [[900,480,880,450],[320,300,310,280],[1400,900,5
 }
 assert.deepEqual(project(0,0),[500,235]);
 console.log('UI logic checks passed: real stage progress, terminal states, elapsed time, popup edges, and map projection.');
+
+const {WORLD_VIEW,constrainView,zoomView,fitPlaces,memoryStops,memoryTrail,memoryThumbnail}=await load('mapGeometry');
+const enlarged=zoomView(WORLD_VIEW,2);
+assert.equal(enlarged.width,500);
+assert.deepEqual(zoomView(WORLD_VIEW,.1),WORLD_VIEW,'Zooming out stops at the world boundary');
+assert.equal(zoomView(enlarged,100).width,125,'Zooming in has a readable maximum');
+const panned=constrainView({x:-200,y:999,width:500,height:235});
+assert.equal(panned.x,0);assert.equal(panned.y,235,'Panning cannot lose the map outside its bounds');
+const anchor=[350,200],anchored=zoomView({x:100,y:50,width:600,height:282},1.5,anchor);
+assert.ok(Math.abs((anchor[0]-100)/600-(anchor[0]-anchored.x)/anchored.width)<.00001,'Zoom preserves the pointer anchor');
+const places=[{id:'west',lon:12,lat:42,image:'/art/coast.svg'},{id:'east',lon:135,lat:35,image:'/art/temples.svg'}];
+const recorded=[{id:'late',place_id:'east',visited_on:'2026-04-01',media:[]},{id:'early',place_id:'west',visited_on:'2025-09-01',media:[]},{id:'unknown',place_id:'missing',visited_on:'2024-01-01',media:[]}];
+const stops=memoryStops(recorded,places);
+assert.deepEqual(stops.map(s=>s.entry.id),['early','late'],'The trail follows dates, not API list order');
+assert.equal(recorded[0].id,'late','Chronological sorting does not mutate application data');
+assert.equal(memoryTrail(stops).length,1,'Only recorded, located memories form connections');
+assert.equal(memoryTrail([{entry:{},place:places[0]},{entry:{},place:places[0]}]).length,0,'Repeated consecutive places do not form fabricated segments');
+assert.equal(memoryTrail([{entry:{},place:{id:'a',lon:179,lat:10}},{entry:{},place:{id:'b',lon:-179,lat:10}}]).length,0,'Date-line crossings do not draw a misleading line across the world');
+const fit=fitPlaces(places);
+for(const place of places){const [x,y]=project(place.lon,place.lat);assert.ok(x>=fit.x&&x<=fit.x+fit.width&&y>=fit.y&&y<=fit.y+fit.height,'Fit memories keeps every stop visible');}
+assert.deepEqual(fitPlaces([]),WORLD_VIEW,'Empty journals show the world');
+assert.equal(memoryThumbnail(recorded[0],places[1]),'/art/temples.svg','No uploaded photo uses the labeled illustration');
+assert.equal(memoryThumbnail({media:[{id:'video',mime:'video/mp4'},{id:'actual-photo',mime:'image/jpeg'}]},places[0]),'/api/media/actual-photo','User photos take precedence over illustration fallbacks');
+console.log('Journey map checks passed: zoom/pan limits, anchor stability, chronological connections, dateline handling, fit bounds, and real-photo selection.');

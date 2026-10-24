@@ -6,7 +6,7 @@
 
 | Capability | Current status |
 | :--- | :--- |
-| World map and five-country discovery | Implemented with bundled SVG geometry and curated, unverified destination cards |
+| World map and five-country discovery | Pan/zoom atlas with natural colors, numbered memory pins, bundled waterways/labels, and curated, unverified destination cards |
 | Journal, timeline, and local persistence | Implemented using SQLite; sample stories are fictional |
 | Photo/video attachment handling | Implemented; FFprobe required; successful real-media/browser flows not yet verified |
 | Planner and saved itineraries | Implemented with editable activity titles/notes and structural checks |
@@ -35,7 +35,7 @@
 
 All current entries remain local and private to the demo installation. Explicit publish/unpublish is planned for the authenticated hosted version. Recording a visit marks its country visited even without a blog; only entries with blog content provide blog links.
 
-The interface uses a travel-first editorial layout inspired by the reference direction at [Mindtrip](https://mindtrip.ai/): a bold yellow hero, oversized original headline, bundled postcard illustrations, rounded planning prompt, compact top navigation, and generous white space. Original Travelogue branding, artwork, and copy are retained. Light mode is the default; the header toggle selects dark mode and remembers the choice locally. Blue oceans, yellow unvisited land, and black visited countries remain on the map; white outlines identify focus/selection. Hover, focus, and press transitions respect reduced motion. Labels and icons accompany colors. Illustrations include passport stamps, postcard imagery, and route lines. Atlas and Journal views are available through responsive navigation; the Journal view renders dated entries along a timeline. Sticky-map storytelling is a future enhancement. Hover previews also work through keyboard selection and mobile taps. Animations respect reduced-motion preferences.
+The interface uses a travel-first editorial layout inspired by the reference direction at [Mindtrip](https://mindtrip.ai/): a bold yellow hero, oversized original headline, bundled postcard illustrations, rounded planning prompt, compact top navigation, and generous white space. Original Travelogue branding, artwork, and copy are retained. Light mode is the default; the header toggle selects dark mode and remembers the choice locally. The atlas now follows a journey-first direction inspired by [Polarsteps](https://www.polarsteps.com/): muted seas, natural ivory/sage land, subtle visited-country tints, coral memory connections, and numbered photo-style stops. Bundled lakes, rivers, and country labels add geographic context. Hover, focus, and press transitions respect reduced motion. Labels and icons accompany colors. Illustrations include passport stamps, postcard imagery, and route lines. Atlas and Journal views are available through responsive navigation; the Journal view renders dated entries along a timeline. Sticky-map storytelling is a future enhancement. Hover previews also work through keyboard selection and mobile taps. Animations respect reduced-motion preferences.
 
 ---
 
@@ -107,7 +107,11 @@ The homepage prompt recognizes curated country/place names and opens the trip fo
 - The Ollama request timeout follows the configured workflow deadline. Raising `PLANNER_TIMEOUT_SECONDS` no longer leaves a separate fixed 110-second request limit.
 - **Full screen** opens a viewport-filling map dialog and requests native fullscreen where supported. Exit using the map control or Escape. Keyboard focus is contained in the dialog.
 - **Pop-out previews** toggles country/place cards. Hover or focus a country or pin to see memories, illustrated attraction thumbnails, and seasonal guidance. Click or press Enter to keep a card open; its links can open memories or official tourism sites. Preview placement is clamped to the map bounds.
-- Maps remain limited to the bundled geometry and five curated countries; these controls do not create new destination data or invoke a model on hover.
+- Drag the map to pan. Use +/−, Ctrl/Command + scroll, the fit-memories button, or the world-view button to control the camera. Pointer-anchored zoom is bounded; panning stays inside the bundled map extent.
+- A chronological sidebar and horizontal memory strip focus recorded stops on the map. Numbered pins use the first uploaded image when available and labeled illustration fallbacks otherwise. Multiple memories at the same place remain accessible in the hover card.
+- **Memory trail** links dated journal entries in chronological order. These are illustrative memory connections, not GPS recordings or confirmed transport routes. No route distances, actual tracks, or travel modes are inferred. Missing places, repeated consecutive places, and date-line crossings do not create misleading segments.
+- Country boundaries, 24 lakes, 13 river features, and 177 country-label records are bundled Natural Earth 1:110m data. This generalized atlas has no street-level tiles, 3D terrain, or GPS tracking. No new map-service keys or external tile requests are needed.
+- Discovery remains limited to the five curated countries; the new controls do not create destination data or invoke a model on hover.
 
 ### Agent Responsibilities
 
@@ -116,11 +120,11 @@ The homepage prompt recognizes curated country/place names and opens the trip fo
 | Destination researcher | Find attractions matching interests and constraints | Places, evidence references, coordinates and visit durations where available |
 | Season researcher | Assess regional visiting periods for the requested dates | Seasonal guidance, sources, tradeoffs, and uncertainty |
 | Itinerary planner | Combine preferences and evidence | Daily activities, travel buffers, and estimated costs |
-| Trip reviewer | Review grounding, constraints, and feasibility | One revised draft and unresolved warnings |
+| Trip reviewer | Independently audit grounding, constraints, and feasibility | Compact categorized findings and warnings; no second full itinerary |
 
 Researchers run in parallel and write separate state keys. Planning and review follow sequentially. Deterministic validation checks required fields, dates, country consistency, duration, and budget arithmetic. Structural validity does not establish factual accuracy.
 
-Bound each run to one country, up to 14 days, eight search calls, four model turns per agent, one reviewer revision, and a 120-second deadline. No recursive delegation. In this milestone tools retrieve evidence before model execution; the custom text/JSON adapter does not claim native Gemma function calling. A single optional Tavily request stays below the search limit. Incomplete runs return explicit warnings or failure status. Agents cannot book trips, publish entries, or execute arbitrary commands.
+Bound each run to one country, up to 14 days, eight search calls, four model turns per agent, one reviewer audit, and a configurable overall deadline (120 seconds by default). No recursive delegation. In this milestone tools retrieve evidence before model execution; the custom text/JSON adapter does not claim native Gemma function calling. A single optional Tavily request stays below the search limit. Incomplete runs return explicit warnings or failure status. Agents cannot book trips, publish entries, or execute arbitrary commands.
 
 ### Data Flow
 
@@ -244,6 +248,11 @@ The environment has no browser and blocks listening sockets, so visual interacti
 | `MODEL_PROVIDER` | No | `demo` | `demo` for scripted output or `ollama` for real local inference |
 | `OLLAMA_BASE_URL` | Ollama | `http://127.0.0.1:11434` | Server-side Ollama endpoint; never exposed directly to browsers |
 | `OLLAMA_MODEL` | Ollama | `gemma3:4b` | Locally downloaded model tag |
+| `OLLAMA_CONTEXT_TOKENS` | No | `8192` | Per-request context, reduced from the original 16384 |
+| `OLLAMA_RESEARCH_TOKENS` | No | `384` | Maximum output per research agent |
+| `OLLAMA_REVIEW_TOKENS` | No | `512` | Maximum output for the compact audit |
+| `OLLAMA_MAX_PLAN_TOKENS` | No | `4096` | Output cap; actual planner allowance scales with trip length |
+| `OLLAMA_KEEP_ALIVE` | No | `15m` | Keep local weights loaded between requests |
 | `PLANNER_TIMEOUT_SECONDS` | No | `120` | Overall run deadline; slower hardware may require more time |
 | `TAVILY_API_KEY` | No | None | Enables one optional live search before research agents |
 | `DATABASE_URL` | Future | None | Reserved for Neon; currently unused |
@@ -261,6 +270,33 @@ npm run dev
 ```
 
 The frontend starts at http://127.0.0.1:5173. Backend startup and port binding require an unrestricted local terminal. `TRAVELOGUE_PYTHON` can select an existing Python executable; otherwise scripts prefer `.venv` and fall back to system Python.
+
+### Local Model Performance
+
+The four-agent workflow is retained, with less repeated generation:
+
+- Research agents each return compact JSON under a 384-token cap.
+- The planner's output allowance scales with trip length: about 1,700 tokens for five days, capped by `OLLAMA_MAX_PLAN_TOKENS`.
+- The reviewer returns a 512-token audit rather than regenerating the whole itinerary. Crowds, booking suggestions, ordinary seasonality, and price uncertainty are advisories merged into the draft. A model approval flag alone cannot reject a plan. Blocking findings must use a category and quote the affected activity plus the user's explicit requirement or a supplied evidence excerpt; unsubstantiated claims remain disclosed review concerns. Hard date, country, source-ID, and budget validation still rejects invalid drafts. Quote matching establishes traceability, not real-world factual accuracy; model and human quality evaluations remain necessary.
+- Agents receive explicit request/evidence state without replaying the entire conversation. User constraints and source references remain in context; presentation-only catalog fields are omitted. Optional search is limited to three 700-character excerpts.
+- Ollama uses an 8,192-token context by default, schema-constrained JSON for planning/review, and `keep_alive=15m`. Truncated output fails explicitly rather than becoming a partial success.
+- Completed model calls record load, prompt evaluation, generation time, token counts, and tokens/second. These are available in a run's `model_timings`, including completed calls before a later failure, and successful `result.performance`.
+
+These changes reduce requested work; **no live latency improvement has been measured in this sandbox**. Unit tests mock the model transport and do not constitute a performance benchmark. Cold starts, CPU/GPU placement, and local hardware still affect speed.
+
+Use `ollama ps` during a run to check the PROCESSOR column. [Ollama documents](https://docs.ollama.com/faq) GPU/CPU placement, keep-alive, and request queuing. Research agents are orchestrated in parallel, but a single Ollama model may queue requests; increasing server parallelism also increases memory requirements.
+
+A smaller model is an explicit quality/speed tradeoff. To experiment, download it on the host and change the model tag:
+
+```bash
+ollama pull gemma3:1b
+```
+
+```dotenv
+OLLAMA_MODEL=gemma3:1b
+```
+
+Restart Travelogue after configuration changes and rerun quality evaluations. Increasing `PLANNER_TIMEOUT_SECONDS` allows a longer wait; it does not make inference faster.
 
 ### Scripted Demo
 
@@ -341,7 +377,7 @@ python3 -m unittest discover -s backend/tests -v
 python3 -m backend.evals
 ```
 
-Verification runs 16 backend/agent tests, 30 offline structural cases, UI logic checks, TypeScript checks, and the production build. It does not run browser tests or live inference. Evaluation output is written to ignored `.runtime/eval-results.json`. Invoke future live quality evaluations separately to avoid unexpected usage.
+Verification runs 25 backend/agent tests, 30 offline structural cases, UI progress/map logic checks, TypeScript checks, and the production build. It does not run browser tests or live inference. Evaluation output is written to ignored `.runtime/eval-results.json`. Invoke future live quality evaluations separately to avoid unexpected usage.
 
 ### Functional Completeness and Correctness
 
@@ -397,12 +433,12 @@ Run deterministic regressions on changes. Before release, run the live suite thr
 
 | Measure | Status |
 | :--- | :--- |
-| Backend/agent regression tests | 16 passing; includes CRUD persistence, invalid media, local-only access, ADK stages, and no silent fallback |
+| Backend/agent regression tests | 25 passing; includes CRUD persistence, invalid media, local-only access, ADK stages, and no silent fallback |
 | Offline structural regression | 30/30 passing; request validation, dates, source IDs, arithmetic, and disclosure checks only |
 | Factual grounding and feasibility | Not evaluated |
 | Hosted privacy and ownership | Not implemented; demo rejects publication and external origins/hosts |
 | Multi-agent versus single-agent comparison | Not evaluated |
-| UI progress and map logic | Passed: parallel stages, terminal states, elapsed time, popup clamping, and projection |
+| UI progress and map logic | Passed: parallel stages, terminal states, elapsed time, popup clamping, zoom/pan limits, fit bounds, date-line handling, chronological trails, photo selection, and projection |
 | Frontend type check and production build | Passed with Node 24.21.0 / TypeScript 5.9.3 |
 | Fresh installation | Clean offline frontend npm ci passed; fresh Python install not verified |
 | Browser, real media, and live Ollama | Not verified; browser, FFprobe, and Ollama unavailable |
@@ -416,7 +452,7 @@ Report dataset version, model identifier, date, environment, and limitations alo
 - Seeded discovery: India, Japan, Italy, France, Thailand. Other countries show empty states; arbitrary-country live discovery is not implemented yet.
 - One country and up to 14 days per itinerary. Only catalog places can be recorded or used in a validated plan.
 - Public publishing, Firebase sign-in, Neon persistence, and Firebase media are not connected.
-- The first frontend uses React/Vite, custom CSS, and SVG geometry rather than the proposed Next.js/Tailwind/Motion/MapLibre stack.
+- The frontend uses React/Vite, custom CSS, and bundled SVG geography rather than the proposed Next.js/Tailwind/Motion/MapLibre stack. Zooming enlarges generalized geography; it does not load street-level detail.
 - The pinned ADK version warns that ParallelAgent/SequentialAgent are deprecated; migrate after validating its replacement workflow API.
 - Automated tests use mocked Ollama responses; they do not establish Gemma output quality.
 - Seasonal patterns are not weather forecasts.

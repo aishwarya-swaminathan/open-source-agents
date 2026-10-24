@@ -65,6 +65,52 @@ class Itinerary(BaseModel):
     warnings: list[str] = Field(min_length=1)
 
 
+class ReviewFinding(BaseModel):
+    category: Literal["travel_advice", "constraint_violation", "source_contradiction", "schedule_conflict"]
+    message: str = Field(min_length=1, max_length=500)
+    requirement_quote: str = Field(default="", max_length=250)
+    activity_quote: str = Field(default="", max_length=300)
+    evidence_quote: str = Field(default="", max_length=300)
+
+
+class ReviewAudit(BaseModel):
+    """Findings are assessed individually; an LLM approval flag is not a gate."""
+    # String findings from older model responses are preserved as advisories.
+    issues: list[ReviewFinding | str] = Field(default_factory=list, max_length=6)
+    warnings: list[str] = Field(default_factory=list, max_length=6)
+
+
+def assess_review(audit: ReviewAudit, plan: Itinerary, request: TripRequest, sources: list[dict]):
+    def normalized(value):
+        return " ".join(value.casefold().split())
+
+    def quoted_in(quote, text):
+        return bool(quote.strip()) and normalized(quote) in normalized(text)
+
+    activities = "\n".join(a.title + "\n" + a.note for day in plan.days for a in day.activities)
+    preferences = request.interests + "\n" + request.pace
+    evidence = [s.get("excerpt", "") for s in sources]
+    blockers, warnings = [], list(audit.warnings)
+    for finding in audit.issues:
+        if isinstance(finding, str):
+            # A free-text concern has no evidence binding and cannot veto a valid draft.
+            warnings.append(finding)
+            continue
+        if finding.category == "travel_advice":
+            warnings.append(finding.message)
+            continue
+        activity_exists = quoted_in(finding.activity_quote, activities)
+        if finding.category == "constraint_violation":
+            supported = activity_exists and quoted_in(finding.requirement_quote, preferences)
+        else:
+            supported = activity_exists and any(quoted_in(finding.evidence_quote, text) for text in evidence)
+        if supported:
+            blockers.append(finding.message)
+        else:
+            warnings.append("Review concern (unverified): " + finding.message)
+    return list(dict.fromkeys(blockers)), list(dict.fromkeys(warnings))
+
+
 def validate_itinerary(plan: Itinerary, request: TripRequest, source_ids: set[str]) -> list[str]:
     from datetime import timedelta
     errors = []

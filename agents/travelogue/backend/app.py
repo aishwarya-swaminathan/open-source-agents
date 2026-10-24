@@ -187,8 +187,10 @@ def create_app(runtime: Path | None = None):
 
     async def execute_run(ident: str, trip: TripRequest):
         run = store.get_json("runs", ident)
-        def progress(stage, status="running"):
+        def progress(stage, status="running", metrics=None):
             mark_stage(run, stage, status)
+            if metrics is not None:
+                run.setdefault("model_timings", []).append(metrics)
             store.put_json("runs", ident, run)
         try:
             async with asyncio.timeout(float(os.getenv("PLANNER_TIMEOUT_SECONDS", "120"))):
@@ -202,7 +204,7 @@ def create_app(runtime: Path | None = None):
             finish_run(run, "failed", "Planning reached its deadline. Your local model may need more time; retry with fewer days or increase PLANNER_TIMEOUT_SECONDS on the host.")
         except ValueError as exc:
             message = str(exc)
-            finish_run(run, "failed", message if message.startswith("Itinerary rejected:") else
+            finish_run(run, "failed", message if message.startswith(("Itinerary rejected:", "Configuration error:")) else
                        "The model returned an invalid itinerary. Try a shorter trip or revise your preferences.")
         except Exception:
             # Avoid returning provider responses, credentials, prompts, or filesystem paths.

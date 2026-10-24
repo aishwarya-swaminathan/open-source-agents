@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 import httpx
 from backend.app import create_app
-from backend.agents import build_workflow, demo_plan, plan_trip
+from backend.agents import build_workflow, demo_plan, plan_trip, generation_settings, compact_context
 from backend.models import TripRequest, Itinerary, validate_itinerary
 
 
@@ -127,20 +127,101 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(req.content)
             calls.append(payload)
             self.assertEqual(payload['model'], 'gemma3:4b')
-            self.assertEqual(payload['format'], 'json')
+            self.assertLessEqual(payload['options']['num_ctx'], 8192)
+            self.assertEqual(payload['keep_alive'], '15m')
             self.assertNotIn('system', [m['role'] for m in payload['messages']])
-            return httpx.Response(200, json={'message': {'content': expected}, 'prompt_eval_count': 50, 'eval_count': 20})
+            content = '\n'.join(m['content'] for m in payload['messages'])
+            if 'Return a concise audit only' in content:
+                self.assertIsInstance(payload['format'], dict)
+                self.assertEqual(payload['options']['num_predict'], 512)
+                reply = json.dumps({'approved': True, 'issues': [], 'warnings': ['Check current opening hours.']})
+            elif 'Create JSON with title' in content:
+                self.assertIsInstance(payload['format'], dict)
+                self.assertLess(payload['options']['num_predict'], 4096)
+                reply = expected
+            else:
+                self.assertEqual(payload['format'], 'json')
+                self.assertEqual(payload['options']['num_predict'], 384)
+                reply = json.dumps({'summary': 'Use curated evidence; verify seasonal notes.', 'source_ids': ['curated-kyoto'], 'warnings': []})
+            return httpx.Response(200, json={'message': {'content': reply}, 'prompt_eval_count': 50, 'eval_count': 20,
+                                            'load_duration': 100000000, 'eval_duration': 500000000})
         build_workflow('http://localhost:11434', 'gemma3:4b', lambda *args: None)
         original = httpx.AsyncClient
         def client(**kwargs):
             return original(transport=httpx.MockTransport(handler), **kwargs)
         stages = []
-        with patch.dict(os.environ, {'TAVILY_API_KEY':'', 'OLLAMA_MODEL':'gemma3:4b'}), patch('backend.agents.httpx.AsyncClient', side_effect=client):
-            result = await plan_trip(request, 'ollama', lambda stage, status: stages.append(stage))
+        with patch.dict(os.environ, {'TAVILY_API_KEY':'', 'OLLAMA_MODEL':'gemma3:4b', 'OLLAMA_CONTEXT_TOKENS':'8192',
+                'OLLAMA_RESEARCH_TOKENS':'384', 'OLLAMA_REVIEW_TOKENS':'512', 'OLLAMA_KEEP_ALIVE':'15m'}), patch('backend.agents.httpx.AsyncClient', side_effect=client):
+            result = await plan_trip(request, 'ollama', lambda stage, status, *extra: stages.append(stage))
         self.assertEqual(len(calls), 4)
         self.assertEqual(result['provider'], 'ollama')
         self.assertEqual(stages[-1], 'validation')
         self.assertEqual(set(stages), {'destination_researcher','season_researcher','itinerary_planner','trip_reviewer','validation'})
+        self.assertIn('Check current opening hours.', result['itinerary']['warnings'])
+        self.assertEqual(result['itinerary']['title'], json.loads(expected)['title'], 'Reviewer must not replace the drafted itinerary')
+        self.assertEqual(len(result['performance']['model_requests']), 4)
+        self.assertEqual(result['performance']['model_requests'][0]['tokens_per_second'], 40)
+
+    async def test_reviewer_rejection_is_not_returned_as_success(self):
+        request = trip(interests='Vegetarian meals only')
+        draft = demo_plan(request)
+        draft.days[0].activities[0].note = 'Dinner is a beef tasting menu.'
+        expected = draft.model_dump_json()
+        def handler(req):
+            content = '\n'.join(m['content'] for m in json.loads(req.content)['messages'])
+            finding = {'category':'constraint_violation', 'message':'Dietary requirement conflicts with the dinner activity.',
+                       'requirement_quote':'Vegetarian meals only', 'activity_quote':'beef tasting menu'}
+            reply = json.dumps({'issues': [finding], 'warnings': []}) if 'Return a concise audit only' in content else expected
+            return httpx.Response(200, json={'message': {'content': reply}})
+        original = httpx.AsyncClient
+        def client(**kwargs): return original(transport=httpx.MockTransport(handler), **kwargs)
+        with patch.dict(os.environ, {'TAVILY_API_KEY':''}), patch('backend.agents.httpx.AsyncClient', side_effect=client):
+            with self.assertRaisesRegex(ValueError, 'Itinerary rejected: Dietary requirement'):
+                await plan_trip(request, 'ollama', lambda *args: None)
+
+    async def test_reported_italy_advice_is_returned_as_warnings(self):
+        request = trip(country='IT')
+        expected = demo_plan(request).model_dump_json()
+        advice = ['Rome & Florence are popular destinations; potential for crowds. Consider booking accommodations in advance.',
+                  'Amalfi Coast: Seasonality impacts travel. Check weather forecasts and potential for high prices.']
+        def handler(req):
+            text = '\n'.join(m['content'] for m in json.loads(req.content)['messages'])
+            # Reproduce the exact legacy failure, including the false approval flag.
+            reply = json.dumps({'approved':False,'issues':advice,'warnings':[]}) if 'Return a concise audit only' in text else expected
+            return httpx.Response(200, json={'message':{'content':reply}})
+        original = httpx.AsyncClient
+        def client(**kwargs): return original(transport=httpx.MockTransport(handler), **kwargs)
+        with patch.dict(os.environ, {'TAVILY_API_KEY':''}), patch('backend.agents.httpx.AsyncClient', side_effect=client):
+            result = await plan_trip(request, 'ollama', lambda *args: None)
+        self.assertEqual(result['itinerary']['country'], 'IT')
+        for message in advice:
+            self.assertIn(message, result['itinerary']['warnings'])
+
+    async def test_compact_context_preserves_constraints_and_evidence(self):
+        request = trip()
+        source = {'id':'official', 'url':'https://www.japan.travel/en/', 'title':'Tourism'}
+        context = json.loads(compact_context(request, [source]))
+        self.assertEqual(context['request'], request.model_dump(mode='json'))
+        self.assertEqual(context['sources'], [source])
+        self.assertTrue(all('image' not in p and 'color' not in p for p in context['places']))
+        self.assertTrue(all('season' in p and 'id' in p for p in context['places']))
+
+    async def test_generation_limits_scale_with_trip_length_and_reject_bad_settings(self):
+        with patch.dict(os.environ, {'OLLAMA_CONTEXT_TOKENS':'8192', 'OLLAMA_MAX_PLAN_TOKENS':'4096'}):
+            self.assertLess(generation_settings(1)['planner_tokens'], generation_settings(14)['planner_tokens'])
+            self.assertLessEqual(generation_settings(14)['planner_tokens'], 4096)
+        with patch.dict(os.environ, {'OLLAMA_CONTEXT_TOKENS':'-1'}):
+            with self.assertRaisesRegex(ValueError, 'Configuration error'):
+                generation_settings()
+
+    async def test_output_limit_is_reported_instead_of_accepting_partial_json(self):
+        def handler(req):
+            return httpx.Response(200, json={'message': {'content': '{}'}, 'done_reason':'length'})
+        original = httpx.AsyncClient
+        def client(**kwargs): return original(transport=httpx.MockTransport(handler), **kwargs)
+        with patch.dict(os.environ, {'TAVILY_API_KEY':''}), patch('backend.agents.httpx.AsyncClient', side_effect=client):
+            with self.assertRaisesRegex(ValueError, 'output-token limit'):
+                await plan_trip(trip(), 'ollama', lambda *args: None)
 
     async def test_ollama_failure_does_not_substitute_demo(self):
         with patch.dict(os.environ, {'TAVILY_API_KEY':''}), patch('backend.agents.httpx.AsyncClient.post', side_effect=httpx.ConnectError('offline')):
